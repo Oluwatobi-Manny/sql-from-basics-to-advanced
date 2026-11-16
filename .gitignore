@@ -1,0 +1,51 @@
+# Environment & Secrets (Database credentials, service tokens)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors & IDEs (DBeaver, DataGrip, VS Code)
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+*.sublime-workspace
+.dbeaver/
+.dbeaver-data-sources.xml
+
+# Local Data Dumps, Backups & Query Exports
+*.dump
+*.sql.gz
+*.sql.tar.gz
+*.bak
+*.csv
+*.tsv
+*.parquet
+*.jsonl
+*.xlsx
+
+# Query History, Scratchpads & Temporary Files
+*.tmp
+*.temp
+*scratch*
+*.log
+logs/
+.sqlfluff_cache/
+
+# Data Modeling / Build Artifacts (dbt, Alembic, Flyway, DuckDB)
+target/
+dbt_packages/
+logs/
+duckdb.db*
+*.duckdb
+*.sqlite
+*.sqlite3
+*.db
+
+to_run.txt
