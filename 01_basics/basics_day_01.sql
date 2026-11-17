@@ -16,7 +16,7 @@ SELECT DISTINCT city FROM customers;
 SELECT * FROM customers ORDER BY signed_up DESC LIMIT 10;
 
 -- PROBLEM 6: Retrieve all customer records belonging to customers whose city is Lagos.
-SELECT * FROM customers WHERE city = 'Lagos';
+SELECT * FROM customers WHERE city = 'New York';
 
 -- PROBLEM 7: Retrieve all products with a price greater than 100, arranging the results in ascending order of price (cheapest to most expensive).
 SELECT * FROM products WHERE unit_price > 100 ORDER BY unit_price ASC;
