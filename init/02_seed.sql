@@ -49,14 +49,18 @@ SELECT
     signed_up
 FROM generated_user_details;
 
+WITH customer_ids AS(
+    SELECT array_agg(customer_id) AS ids FROM customers
+)
 INSERT INTO orders (customer_id, order_date, status, payment_method, total_amount)
 SELECT 
-    (SELECT customer_id FROM customers ORDER BY random() LIMIT 1) AS customer_id,
+    c.ids[floor(random() * array_length(c.ids, 1)) + 1] AS customer_id,
     NOW() - (random() * (INTERVAL '300 days')) AS order_date,
     (ARRAY['pending', 'shipped', 'delivered', 'cancelled', 'returned'])[floor(random() * 5) + 1] AS status,
     (ARRAY['card', 'bank_transfer', 'cash_on_delivery', 'wallet', 'other'])[floor(random() * 5) + 1] AS payment_method,
     ROUND((random() * 1000 + 50)::NUMERIC, 2) AS total_amount
-FROM generate_series(1, 200) AS s(i);
+FROM generate_series(1, 200) AS s(i)
+CROSS JOIN customer_ids c;
 
 -- Distinct products per order. Price is from the products table, quantity is random between 1 and 5
 INSERT INTO order_items (order_id, product_id, quantity, unit_price)
