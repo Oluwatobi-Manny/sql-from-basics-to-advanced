@@ -49,3 +49,4 @@ duckdb.db*
 *.db
 
 to_run.txt
+.vscode/settings.json
