@@ -183,7 +183,7 @@ WHERE o.status IS DISTINCT FROM 'cancelled'
 
 -- For readability, EXISTS is preferred because it explicitly communicates
 -- the intent without risking accidental duplicate rows and handles NULL values
--- safely.
+-- safely (in NOT EXISTS).
 
 -- PROBLEM 4: Find orders whose amount is greater than the average amount of orders placed by the same customer
 -- A. CORRELATED SUBQUERY
@@ -197,24 +197,25 @@ WHERE o.amount > (
         SELECT ROUND(AVG(ob.amount), 2)
         FROM orders_big ob
         WHERE o.customer_id = ob.customer_id
+        AND ob.status IS DISTINCT FROM 'cancelled'
     )
     AND o.status IS DISTINCT FROM 'cancelled'
 ;
 
 -- QUERY PLAN                                             
--- Execution Plans: Hash Join -> Seq Scan on orders_big o -> Hash -> Seq Scan on customers c
--- Scan types: Seq Scan on orders_big o -> Seq Scan on customers c
--- Join Strategies: Hash Join
--- Execution time: 345.973 ms
--- Number of rows returned: 66915
--- Planning time: 0.410 ms
+-- Execution Plans: Seq Scan on orders_big o -> Aggregate -> Bitmap Heap Scan on orders_big ob -> Bitmap Index Scan on idx_orders_big_customer_id_order_date
+-- Scan types: Seq Scan on orders_big o -> Bitmap Heap Scan on orders_big ob -> Bitmap Index Scan on idx_orders_big_customer_id_order_date
+-- Join Strategies: 
+-- Execution time: 
+-- Number of rows returned: 
+-- Planning time: 
 
 -- B. AGGREGATED CTE
 EXPLAIN ANALYZE
 WITH avg_orders AS (
     SELECT
         customer_id,
-        AVG(amount) AS avg_amount
+        ROUND(AVG(amount), 2) AS avg_amount
     FROM orders_big
     WHERE status IS DISTINCT FROM 'cancelled'
     GROUP BY customer_id
@@ -245,7 +246,7 @@ WITH customer_averages AS (
         order_id,
         customer_id,
         amount,
-        AVG(amount) OVER (PARTITION BY customer_id) AS avg_amount
+        ROUND(AVG(amount) OVER (PARTITION BY customer_id), 2) AS avg_amount
     FROM orders_big
     WHERE status IS DISTINCT FROM 'cancelled'
 )
@@ -306,10 +307,10 @@ LIMIT 20
 -- Execution Time: 0.102 ms
 
 -- PostgreSQL has no way to jump straight to row 900,001 using OFFSET alone. Even with an index,
--- it must count through all 900,000 preceding rows, fetch, sort and then discard them
--- before returning the 20 requested rows. By filtering with the WHERE clause for the KEYSET pagination
--- PostgreSQL uses the B-tree index on order_id to seek directly to the exact entry immediately
--- following the previous page's cursor reading only the needed 20 rows.
+-- it must count through all 900,000 preceding rows, fetch and then discard them before returning 
+-- the 20 requested rows. By filtering with the WHERE clause for the KEYSET pagination. PostgreSQL uses 
+-- the B-tree index on order_id to seek directly to the exact entry immediately following the previous
+-- page's cursor reading only the needed 20 rows.
 
 -- PROBLEM 6: EXPLAIN ANALYZE WITH BUFFERS
 -- Choose one of your slower queries from the previous exercises.
@@ -378,23 +379,23 @@ ORDER BY order_date;
 -- QUERY PLAN                                       
 -- Execution Plans: Sort -> HashAggregate -> Bitmap Heap Scan on orders_big -> Bitmap Index Scan on idx_orders_big_order_date
 -- Scan types: Bitmap Heap Scan on orders_big -> Bitmap Index Scan on idx_orders_big_order_date
--- Execution time: 0.238 ms
+-- Planning time: 0.238 ms
 -- Number of rows returned: 112
 -- Heap Blocks: exact=7761
--- Planning time: 74.347 ms
+-- Execution time: 74.347 ms
 
 -- B. MATERIALIZED VIEW QUERY
 -- Calculate the same monthly revenue from daily_revenue.
 EXPLAIN ANALYZE
 SELECT
-    order_date::DATE,
+    order_date,
     status,
     total_revenue,
     order_count
 FROM daily_revenue
-WHERE order_date::date >= DATE '2025-02-01'
-    AND order_date::date < DATE '2025-03-01'
-ORDER BY order_date::date;
+WHERE order_date >= DATE '2025-02-01'
+    AND order_date < DATE '2025-03-01'
+ORDER BY order_date;
 
 -- QUERY PLAN                                       
 -- Execution Plans: Sort -> Seq Scan on daily_revenue
@@ -416,6 +417,93 @@ ORDER BY order_date::date;
 -- Transform: aggregate the raw data into daily_revenue.
 -- Serve: allow dashboard queries to read the precomputed results.
 
--- Unlike the live query against orders_big, daily_revenue is a point in time snapshot. Until
--- REFRESH MATERIALIZED VIEW daily_revenue is explicitly ran, new orders or changes will not
--- automatically update.
+-- Unlike the live query against orders_big, daily_revenue is a point in time snapshot. Until REFRESH
+-- MATERIALIZED VIEW daily_revenue is run, new orders or changes will not  automatically update.
+
+-- PROBLEM 8: TEST MATERIALIZED VIEW FRESHNESS AND REFRESH
+-- Insert 1,000 new rows into orders_big.
+DROP TABLE IF EXISTS extra_orders;
+
+CREATE TEMP TABLE extra_orders AS
+SELECT
+    gs AS order_id,
+    FLOOR(RANDOM() * 60 + 1)::INT AS customer_id,
+    DATE '2025-01-01' + FLOOR(RANDOM() * 365)::INT AS order_date,
+    (ARRAY[
+        'returned',
+        'pending',
+        'shipped',
+        'cancelled',
+        'delivered'
+    ])[FLOOR(RANDOM() * 5 + 1)::INT] AS status,
+    ROUND((RANDOM() * 5000)::NUMERIC, 2) AS amount
+FROM generate_series(1000001, 1001000) AS gs;
+
+--Insert
+INSERT INTO orders_big
+SELECT * FROM extra_orders;
+
+-- Query daily_revenue before refreshing it.
+SELECT
+    order_date::DATE,
+    status,
+    total_revenue,
+    order_count
+FROM daily_revenue
+WHERE order_date::date >= DATE '2025-02-01'
+    AND order_date::date < DATE '2025-03-01'
+ORDER BY order_date::date;
+
+-- Compare the result with a fresh aggregation directly from orders_big.
+SELECT
+    order_date,
+    status,
+    SUM(amount) AS total_revenue,
+    COUNT(order_id) AS order_count
+FROM orders_big
+WHERE status IS DISTINCT FROM 'cancelled'
+    AND order_date >= DATE '2025-02-01'
+    AND order_date < DATE '2025-03-01'
+GROUP BY order_date, status
+ORDER BY order_date;
+
+-- There are few changes in the total_revenue and order_count for the live query of orders_big
+-- compared to the stale results of daily_revenue which still show result from the previous run.
+
+-- Run
+REFRESH MATERIALIZED VIEW daily_revenue;
+
+-- Query the materialized view again and compare it with the raw table aggregation.
+SELECT
+    order_date::DATE,
+    status,
+    total_revenue,
+    order_count
+FROM daily_revenue
+WHERE order_date::date >= DATE '2025-02-01'
+    AND order_date::date < DATE '2025-03-01'
+
+EXCEPT
+
+SELECT
+    order_date,
+    status,
+    SUM(amount) AS total_revenue,
+    COUNT(order_id) AS order_count
+FROM orders_big
+WHERE status IS DISTINCT FROM 'cancelled'
+    AND order_date >= DATE '2025-02-01'
+    AND order_date < DATE '2025-03-01'
+GROUP BY order_date, status
+ORDER BY order_date;
+
+-- Both now return the same results with the EXCEPT returning zero rows.
+
+-- A transformation that can be safely rerun produces the same correct output from the same underlying source
+-- data. Refreshing a materialized view rebuilds its stored results rather than simply adding the new 
+-- rows to the previous totals.This avoids accumulating duplicate aggregates when the transformation is rerun.
+-- If you plan to refresh this view without blocking concurrent SELECT queries (REFRESH MATERIALIZED VIEW 
+-- CONCURRENTLY daily_revenue;), create a UNIQUE index on the grouping columns right after creating the view.
+
+DROP TABLE IF EXISTS orders_big;
+DROP MATERIALIZED TABLE IF EXISTS daily_revenue;
